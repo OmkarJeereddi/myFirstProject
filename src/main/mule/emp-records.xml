@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="6b278b2f-6845-43f8-8e2f-f10ae09be43e" >
+		<http:listener-connection host="0.0.0.0" port="8081" />
+	</http:listener-config>
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="ae829942-c812-4985-973d-e5c1ed6b029e" >
+		<db:oracle-connection host="localhost" user="system" password="1239754" serviceName="xe" />
+	</db:config>
+	<os:object-store name="Object_store" doc:name="Object store" doc:id="94a75a63-584f-444f-a159-3fa4eba9c6a6" />
+	<flow name="emp-recordsFlow" doc:id="2a8bf0b7-20c0-48e3-b847-99fda1d6f423" >
+		<http:listener doc:name="Listener" doc:id="ae303193-ce37-4228-ba12-686500ee849a" config-ref="HTTP_Listener_config" path="/new-emp"/>
+		<ee:transform doc:name="Transform Message" doc:id="a1c0d4cf-e7d6-4237-8602-90dba47fae83" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+payload map (value,index) ->
+{
+	"empid" : value.empid,
+	"name" : value.name,
+	"age" : value.age,
+	"birth_dt" : value.birth_dt as String {format : "yyyy-MM-dd"} as Date {format : "yyyy-MM-dd"},
+	"gender" : value.gender,
+	"create_dt" : value.create_dt as String {format : "yyyy-MM-dd"} as Date {format : "yyyy-MM-dd"},
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<db:bulk-insert doc:name="Bulk insert" doc:id="f5b95f0a-48ce-4043-a672-a819b5f3351b" config-ref="Database_Config">
+			<db:sql >insert into emp(empid,name,age,birth_dt,gender,create_dt) values(:empid,:name,:age,:birth_dt,:gender,:create_dt)</db:sql>
+		</db:bulk-insert>
+		<logger level="INFO" doc:name="Logger" doc:id="88b69381-79e5-4388-a075-93aa65ac44d6" message="------------------ insert response : #[payload]"/>
+	</flow>
+	<flow name="emp-recordsFlow1" doc:id="b48a19c4-699e-4c86-b416-d2cd0728ba18" >
+		<http:listener doc:name="Listener" doc:id="9f4e5019-f3e5-4345-ba0e-16bca73de357" config-ref="HTTP_Listener_config" path="empOnboard"/>
+		<os:retrieve doc:name="Retrieve" doc:id="4a954a38-0ef2-43d6-84c0-181bcaea2657" key="recentDateValue" objectStore="Object_store" target="recentDate">
+			<os:default-value ><![CDATA[#[now()]]]></os:default-value>
+		</os:retrieve>
+		<logger level="INFO" doc:name="Logger" doc:id="70143c03-e893-42e0-8282-cf5930bdd70a" message="#[vars.recentDate]"/>
+		<db:select doc:name="pull-data-emp" doc:id="15838134-93a8-489f-83ae-cde70a3552ab" config-ref="Database_Config">
+			<db:sql >select * from emp where create_dt &gt; :date</db:sql>
+			<db:input-parameters ><![CDATA[#[{'date' : vars.recentDate}]]]></db:input-parameters>
+		</db:select>
+		<choice doc:name="Choice" doc:id="8f0f7f4a-8312-43d7-8208-a4efd3ae62f0" >
+			<when expression="#[sizeOf(payload) &gt; 1]">
+				<ee:transform doc:name="Transform Message" doc:id="834add0d-90b8-42f2-8880-7b4b63a80d3c">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+payload map (value,index) ->
+{
+	empid: value.EMPID,
+	name: value.NAME,
+	age: value.AGE,
+	birth_dt: value.BIRTH_DT,
+	gender: value.GENDER,
+	create_dt: value.CREATE_DT
+}]]></ee:set-payload>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="maxDateValue"><![CDATA[%dw 2.0
+output application/java
+---
+((payload orderBy ($.create_dt))[-1]).create_dt]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+				<logger level="INFO" doc:name="Logger" doc:id="b0775b1d-fa19-426d-b110-b90cc73826ba" message='#[vars.maxDateValue ++ "---------------"]' />
+				<db:bulk-insert doc:name="Bulk insert" doc:id="7ea1a3db-4689-4285-8668-2a83279b8f82" config-ref="Database_Config">
+			<db:sql>insert into raw_emp(empid,name,age,birth_dt,gender,create_dt) values(:empid,:name,:age,:birth_dt,:gender,:create_dt)</db:sql>
+		</db:bulk-insert>
+				<os:store doc:name="Store" doc:id="91275dda-8d96-44ee-a32a-fa131f056029" key="recentDateValue" objectStore="Object_store">
+			<os:value><![CDATA[#[vars.maxDateValue]]]></os:value>
+		</os:store>
+				<logger level="INFO" doc:name="Logger" doc:id="78fe6cf1-9ebd-427f-9741-a1045e7f4f9f" message="--------- response : #[payload]" />
+				<logger level="INFO" doc:name="Logger" doc:id="35be6ac2-72a8-482c-be09-a3efe4f10839" />
+			</when>
+			<otherwise >
+				<ee:transform doc:name="Transform Message" doc:id="7f08e21f-33f8-427f-b6b5-b5a503e9d9ab" >
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"resp" : "No records from EMP Table"
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</otherwise>
+		</choice>
+	</flow>
+</mule>
